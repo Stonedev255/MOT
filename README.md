@@ -220,5 +220,3 @@ python main.py --detector faster_rcnn --dataset MOT20 --extractor swin --save-vi
 - **문제 해결**: 실행 중 오류 발생 시, 로그 파일(`results/` 내 생성)을 확인하거나 콘솔 출력을 점검.
 
 ---
-
-이 `README.md`는 프로젝트의 핵심 내용을 간결하게 정리했으며, 사용자가 쉽게 접근하고 실행할 수 있도록 구성했습니다. 추가로 포함하고 싶은 내용이나 수정할 부분이 있다면 말씀해주세요!
