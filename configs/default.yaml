@@ -1,0 +1,30 @@
+# YOLO + DeepSORT 성능 평가를 위한 기본 설정 파일
+
+# 데이터셋 설정
+dataset: MOT16
+data_dir: /mnt/sda1/yrok/data
+
+# 객체 탐지 설정
+detector: yolov8  # yolov5, yolov7, yolov8 중 선택
+conf_thres: 0.5   # 객체 탐지 신뢰도 임계값
+iou_thres: 0.5    # NMS IoU 임계값
+
+# 추적기 설정
+tracker: deepsort  # 현재는 deepsort만 지원
+
+# DeepSORT 설정
+max_dist: 0.2        # 최대 코사인 거리 (특징 매칭 임계값)
+min_confidence: 0.3  # 최소 탐지 신뢰도
+max_iou_distance: 0.7  # 최대 IoU 거리 (탐지 매칭 임계값)
+max_age: 70          # 트랙이 유지되는 최대 프레임 수
+n_init: 3            # 트랙 초기화에 필요한 연속 탐지 수
+nn_budget: 100       # 특징 저장소 크기 제한
+
+# 출력 설정
+output_dir: results  # 결과 저장 디렉토리
+save_video: true     # 추적 결과 비디오 저장 여부
+save_txt: true       # 추적 결과 텍스트 파일 저장 여부
+output_format: json  # 결과 저장 형식 (json 또는 csv)
+
+# 하드웨어 설정
+device: 0  # GPU 디바이스 ID (빈 문자열이면 첫 번째 가용 GPU 사용, 'cpu'는 CPU 사용)

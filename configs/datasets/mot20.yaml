@@ -1,0 +1,18 @@
+# MOT20 데이터셋 설정
+
+dataset: MOT20
+data_dir: /mnt/sda1/yrok/data
+
+# 시퀀스 설정 (테스트용)
+sequence:
+  - MOT20-04
+  - MOT20-06
+  - MOT20-07
+  - MOT20-08
+
+# 클래스 필터링 (COCO 데이터셋 기준)
+classes: [0]  # Person class only
+
+# 밀집된 환경을 위한 DeepSORT 조정
+max_iou_distance: 0.8  # 더 관대한 IoU 기준 (밀집 환경)
+max_age: 50            # 더 짧은 트랙 수명 (밀집 환경에서의 혼동 감소)
