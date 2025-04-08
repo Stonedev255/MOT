@@ -22,7 +22,7 @@ EXTRACTORS=("resnet50" "swin" "convnext" "efficientnetv2")
 # 각 특징 추출기 실행
 for EXTRACTOR in "${EXTRACTORS[@]}"; do
     echo -e "\n===== $EXTRACTOR 특징 추출기 실행 ====="
-    python main.py \
+    python3 main.py \
         --detector "$DETECTOR" \
         --dataset "$DATASET" \
         --conf-thres "$CONF_THRES" \

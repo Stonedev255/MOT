@@ -176,3 +176,7 @@ cython_debug/
 results
 models
 yolov8x.pt
+temp_trackers
+comparison_results
+comparison_results_yolov8
+MOT20-01
