@@ -10,12 +10,15 @@ import os
 import sys
 import numpy as np
 import logging
-from collections import defaultdict
+import shutil
+import tempfile
+import io
+from contextlib import redirect_stdout
 from trackeval import Evaluator, datasets, metrics
 
 logger = logging.getLogger(__name__)
 
-def calculate_mot_metrics(tracking_results, gt_path, sequence_name):
+def calculate_mot_metrics(tracking_results, gt_path, sequence_name, output_dir=None):
     """
     TrackEval을 사용해 MOT 평가 지표 계산
     
@@ -23,176 +26,156 @@ def calculate_mot_metrics(tracking_results, gt_path, sequence_name):
         tracking_results: 추적 결과 리스트 (각 항목은 [frame_id, track_id, x1, y1, x2, y2, conf] 형식)
         gt_path: Ground Truth 파일 경로
         sequence_name: 시퀀스 이름
+        output_dir: 텍스트 파일 저장 디렉토리 (기본값: None, 현재 디렉토리에 저장)
         
     Returns:
         metric_results: 계산된 평가 지표 딕셔너리
     """
-    print(f"DEBUG: calculate_mot_metrics 호출됨 - sequence_name: {sequence_name}")
+    logger.debug(f"calculate_mot_metrics 호출됨 - sequence_name: {sequence_name}")
 
+    temp_dir = tempfile.mkdtemp()
+    logger.debug(f"임시 디렉토리 생성됨: {temp_dir}")
+    
     try:
-        import shutil
-        import tempfile
-        from trackeval import metrics as track_metrics
+        seq_folder = os.path.dirname(os.path.dirname(gt_path))
+        config = {
+            'TRACKERS_TO_EVAL': [sequence_name],
+            'GT_FOLDER': temp_dir,
+            'TRACKERS_FOLDER': os.path.join(temp_dir, 'trackers'),
+            'OUTPUT_FOLDER': None,
+            'BENCHMARK': 'MOT20',
+            'SPLIT_TO_EVAL': 'train',
+            'DO_PREPROC': False,
+        }
+        logger.debug(f"config: {config}")
         
-        # 원본 시퀀스 폴더
-        seq_folder = os.path.dirname(os.path.dirname(gt_path))  # /mnt/sda1/yrok/data/MOT20/train/MOT20-01
+        seq_temp_dir = os.path.join(temp_dir, sequence_name)
+        os.makedirs(seq_temp_dir, exist_ok=True)
+        gt_temp_dir = os.path.join(seq_temp_dir, 'gt')
+        os.makedirs(gt_temp_dir, exist_ok=True)
+        tracker_dir = os.path.join(config['TRACKERS_FOLDER'], sequence_name, 'data')
+        os.makedirs(tracker_dir, exist_ok=True)
         
-        # 임시 작업 디렉토리 생성
-        temp_dir = tempfile.mkdtemp()
-        print(f"DEBUG: 임시 디렉토리 생성됨: {temp_dir}")
+        shutil.copy(os.path.join(seq_folder, 'seqinfo.ini'), os.path.join(seq_temp_dir, 'seqinfo.ini'))
+        logger.debug(f"seqinfo.ini 복사됨")
+        gt_dest = os.path.join(gt_temp_dir, 'gt.txt')
+        shutil.copy(gt_path, gt_dest)
+        logger.debug(f"GT 파일 복사됨")
         
-        try:
-            # TrackEval 설정
-            config = {
-                'TRACKERS_TO_EVAL': [sequence_name],
-                'GT_FOLDER': temp_dir,  # 임시 디렉토리를 GT_FOLDER로 사용
-                'TRACKERS_FOLDER': os.path.join(temp_dir, 'trackers'),
-                'OUTPUT_FOLDER': None,
-                'BENCHMARK': 'MOT20',
-                'SPLIT_TO_EVAL': 'train',
-                'DO_PREPROC': False,
-                'METRICS': ['HOTA', 'CLEAR', 'Identity'],  # 이 설정은 평가하지 않을 때만 사용됨
+        tracker_file = os.path.join(tracker_dir, f"{sequence_name}.txt")
+        with open(tracker_file, 'w') as f:
+            for result in tracking_results:
+                frame_id, track_id, x1, y1, x2, y2, conf = result
+                w, h = x2 - x1, y2 - y1
+                f.write(f"{int(frame_id)},{int(track_id)},{x1:.2f},{y1:.2f},{w:.2f},{h:.2f},{conf:.6f},-1,-1,-1\n")
+        logger.debug(f"추적 파일 생성됨: {tracker_file}")
+        
+        dataset_config = {
+            'GT_FOLDER': config['GT_FOLDER'],
+            'TRACKERS_FOLDER': config['TRACKERS_FOLDER'],
+            'BENCHMARK': config['BENCHMARK'],
+            'SPLIT_TO_EVAL': config['SPLIT_TO_EVAL'],
+            'DO_PREPROC': config['DO_PREPROC'],
+            'TRACKER_SUB_FOLDER': 'data',
+            'GT_LOC_FORMAT': '{gt_folder}/{seq}/gt/gt.txt',
+            # 'CLASSES_TO_EVAL' 제거: 모든 클래스를 평가하도록 설정
+            'SEQ_INFO': {sequence_name: None},
+            'SKIP_SPLIT_FOL': True,
+        }
+        logger.debug(f"dataset_config: {dataset_config}")
+        
+        dataset = datasets.MotChallenge2DBox(dataset_config)
+        evaluator = Evaluator()
+        metrics_list = [metrics.HOTA(), metrics.CLEAR(), metrics.Identity()]
+        
+        output_buffer = io.StringIO()
+        with redirect_stdout(output_buffer):
+            results = evaluator.evaluate([dataset], metrics_list)
+        output_text = output_buffer.getvalue()
+        
+        if output_dir is None:
+            output_dir = os.getcwd()
+        os.makedirs(output_dir, exist_ok=True)
+        output_file = os.path.join(output_dir, f"trackeval_output_{sequence_name}.txt")
+        with open(output_file, 'w') as f:
+            f.write(output_text)
+        logger.info(f"TrackEval 콘솔 출력 저장됨: {output_file}")
+        
+        if isinstance(results, tuple):
+            metrics_data = results[0]
+        else:
+            metrics_data = results
+        
+        # 모든 클래스에 대한 결과를 저장하기 위해 클래스별로 처리
+        metric_results = {}
+        for class_name in metrics_data['MotChallenge2DBox'][sequence_name][sequence_name]:
+            tracker_data = metrics_data['MotChallenge2DBox'][sequence_name][sequence_name][class_name]
+            hota_metrics = tracker_data.get('HOTA', {})
+            clear_metrics = tracker_data.get('CLEAR', {})
+            id_metrics = tracker_data.get('Identity', {})
+            count_metrics = tracker_data.get('Count', {})
+            
+            metric_results[class_name] = {
+                'HOTA': float(np.mean(hota_metrics.get('HOTA', [0])) * 100),
+                'DetA': float(np.mean(hota_metrics.get('DetA', [0])) * 100),
+                'AssA': float(np.mean(hota_metrics.get('AssA', [0])) * 100),
+                'DetRe': float(np.mean(hota_metrics.get('DetRe', [0])) * 100),
+                'DetPr': float(np.mean(hota_metrics.get('DetPr', [0])) * 100),
+                'AssRe': float(np.mean(hota_metrics.get('AssRe', [0])) * 100),
+                'AssPr': float(np.mean(hota_metrics.get('AssPr', [0])) * 100),
+                'LocA': float(np.mean(hota_metrics.get('LocA', [0])) * 100),
+                'OWTA': float(np.mean(hota_metrics.get('OWTA', [0])) * 100),
+                'HOTA(0)': float(hota_metrics.get('HOTA(0)', 0) * 100),
+                'LocA(0)': float(hota_metrics.get('LocA(0)', 0) * 100),
+                'HOTALocA(0)': float(hota_metrics.get('HOTALocA(0)', 0) * 100),
+                'MOTA': float(clear_metrics.get('MOTA', 0) * 100),
+                'MOTP': float(clear_metrics.get('MOTP', 0) * 100),
+                'MODA': float(clear_metrics.get('MODA', 0) * 100),
+                'CLR_Re': float(clear_metrics.get('CLR_Re', 0) * 100),
+                'CLR_Pr': float(clear_metrics.get('CLR_Pr', 0) * 100),
+                'MTR': float(clear_metrics.get('MTR', 0) * 100),
+                'PTR': float(clear_metrics.get('PTR', 0) * 100),
+                'MLR': float(clear_metrics.get('MLR', 0) * 100),
+                'sMOTA': float(clear_metrics.get('sMOTA', 0) * 100),
+                'CLR_TP': int(clear_metrics.get('CLR_TP', 0)),
+                'CLR_FN': int(clear_metrics.get('CLR_FN', 0)),
+                'CLR_FP': int(clear_metrics.get('CLR_FP', 0)),
+                'IDSW': int(clear_metrics.get('IDSW', 0)),
+                'MT': int(clear_metrics.get('MT', 0)),
+                'PT': int(clear_metrics.get('PT', 0)),
+                'ML': int(clear_metrics.get('ML', 0)),
+                'Frag': int(clear_metrics.get('Frag', 0)),
+                'IDF1': float(id_metrics.get('IDF1', 0) * 100),
+                'IDR': float(id_metrics.get('IDR', 0) * 100),
+                'IDP': float(id_metrics.get('IDP', 0) * 100),
+                'IDTP': int(id_metrics.get('IDTP', 0)),
+                'IDFN': int(id_metrics.get('IDFN', 0)),
+                'IDFP': int(id_metrics.get('IDFP', 0)),
+                'Dets': int(count_metrics.get('Dets', 0)),
+                'GT_Dets': int(count_metrics.get('GT_Dets', 0)),
+                'IDs': int(count_metrics.get('IDs', 0)),
+                'GT_IDs': int(count_metrics.get('GT_IDs', 0))
             }
-            print(f"DEBUG: config: {config}")
-            
-            # 필요한 디렉토리 구조 생성
-            # 1. 시퀀스 디렉토리
-            seq_temp_dir = os.path.join(temp_dir, sequence_name)
-            os.makedirs(seq_temp_dir, exist_ok=True)
-            
-            # 2. GT 디렉토리
-            gt_temp_dir = os.path.join(seq_temp_dir, 'gt')
-            os.makedirs(gt_temp_dir, exist_ok=True)
-            
-            # 3. 트래커 디렉토리
-            tracker_dir = os.path.join(config['TRACKERS_FOLDER'], sequence_name, 'data')
-            os.makedirs(tracker_dir, exist_ok=True)
-            
-            # 4. seqinfo.ini 복사
-            seqinfo_src = os.path.join(seq_folder, 'seqinfo.ini')
-            seqinfo_dest = os.path.join(seq_temp_dir, 'seqinfo.ini')
-            shutil.copy(seqinfo_src, seqinfo_dest)
-            print(f"DEBUG: seqinfo.ini 복사됨: {seqinfo_src} -> {seqinfo_dest}")
-            
-            # 5. GT 파일 복사
-            gt_src = gt_path
-            gt_dest = os.path.join(gt_temp_dir, 'gt.txt')
-            shutil.copy(gt_src, gt_dest)
-            print(f"DEBUG: GT 파일 복사됨: {gt_src} -> {gt_dest}")
-            
-            # 6. 추적 결과 파일 생성
-            tracker_file = os.path.join(tracker_dir, f"{sequence_name}.txt")
-            with open(tracker_file, 'w') as f:
-                for result in tracking_results:
-                    frame_id, track_id, x1, y1, x2, y2, conf = result
-                    w, h = x2 - x1, y2 - y1
-                    f.write(f"{int(frame_id)},{int(track_id)},{x1:.2f},{y1:.2f},{w:.2f},{h:.2f},{conf:.6f},-1,-1,-1\n")
-            print(f"DEBUG: 추적 파일 생성됨: {tracker_file}")
-            
-            # TrackEval 데이터셋 초기화
-            dataset_config = {
-                'GT_FOLDER': config['GT_FOLDER'],
-                'TRACKERS_FOLDER': config['TRACKERS_FOLDER'],
-                'BENCHMARK': config['BENCHMARK'],
-                'SPLIT_TO_EVAL': config['SPLIT_TO_EVAL'],
-                'DO_PREPROC': config['DO_PREPROC'],
-                'TRACKER_SUB_FOLDER': 'data',
-                'GT_LOC_FORMAT': '{gt_folder}/{seq}/gt/gt.txt',  # 상대 경로 사용
-                'CLASSES_TO_EVAL': ['pedestrian'],
-                'SEQ_INFO': {sequence_name: None},
-                'SKIP_SPLIT_FOL': True,
-            }
-            print(f"DEBUG: dataset_config: {dataset_config}")
-            logger.info("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@000000000000000")
-            
-            # 데이터셋 생성
-            dataset = datasets.MotChallenge2DBox(dataset_config)
-            print(f"DEBUG: dataset 생성됨: {dataset}")
-            logger.info("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@1111111111111")
-            
-            # 평가기 생성 및 실행
-            evaluator = Evaluator(config)
-            print(f"DEBUG: evaluator 생성됨: {evaluator}")
-            logger.info("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@22222222222222")
-            
-            # 평가할 메트릭 객체 생성
-            metric_list = []
-            for metric_name in ['HOTA', 'CLEAR', 'Identity']:
-                if metric_name == 'HOTA':
-                    metric_list.append(track_metrics.HOTA())
-                elif metric_name == 'CLEAR':
-                    metric_list.append(track_metrics.CLEAR())
-                elif metric_name == 'Identity':
-                    metric_list.append(track_metrics.Identity())
-            
-            # 평가 실행 - 데이터셋 객체를 리스트에 담아 전달
-            # 결과 처리 부분 수정
-            metrics_list = evaluator.evaluate([dataset], metric_list)
-            print(f"DEBUG: TrackEval 결과 구조: {metrics_list}")
-            logger.info(f"TrackEval 결과 구조: {metrics_list}")
-
-            # 결과가 튜플인 경우 첫 번째 요소를 추출 (TrackEval 최신 버전에서는 튜플을 반환)
-            if isinstance(metrics_list, tuple):
-                metrics_data = metrics_list[0]  # 첫 번째 요소는 실제 지표 데이터
-            else:
-                metrics_data = metrics_list  # 이전 버전 호환성 유지
-                
-            # 이제 metrics_data를 사용하여 결과 처리 계속
-            if isinstance(metrics_data, dict):
-                print("DEBUG: metrics_data는 딕셔너리입니다")
-                tracker_results = metrics_data.get('MotChallenge2DBox', {}).get('MOT20-01', {}).get('MOT20-01', {}).get('pedestrian', {})
-            else:
-                print("DEBUG: metrics_data는 딕셔너리가 아닙니다")
-                raise ValueError(f"예상치 못한 TrackEval 결과 형식: {type(metrics_data)}")
-
-            # 지표 추출
-            print(f"DEBUG: tracker_results: {tracker_results}")
-            hota_metrics = tracker_results.get('HOTA', {})
-            clear_metrics = tracker_results.get('CLEAR', {})
-            id_metrics = tracker_results.get('Identity', {})
-
-            # 지표 정리
-            metric_results = {
-                'mota': float(clear_metrics.get('MOTA', 0) * 100),
-                'motp': float(clear_metrics.get('MOTP', 0) * 100),
-                'num_switches': int(id_metrics.get('IDSW', 0)),
-                'mostly_tracked': int(clear_metrics.get('MT', 0)),
-                'mostly_lost': int(clear_metrics.get('ML', 0)),
-                'num_fragmentations': int(clear_metrics.get('Frag', 0)),
-                'idf1': float(id_metrics.get('IDF1', 0) * 100),
-                'precision': float(clear_metrics.get('CLR_Pr', 0) * 100),
-                'recall': float(clear_metrics.get('CLR_Re', 0) * 100),
-                'fp': int(clear_metrics.get('CLR_FP', 0)),
-                'fn': int(clear_metrics.get('CLR_FN', 0)),
-                'hota': float(hota_metrics.get('HOTA(0)', 0) * 100),
-}
-            
-            print(f"DEBUG: 계산된 지표: {metric_results}")
-            logger.info(f"계산된 지표: {metric_results}")
-            
-            return metric_results
-            
-        finally:
-            # 임시 디렉토리 정리
-            print(f"DEBUG: 임시 디렉토리 정리: {temp_dir}")
-            shutil.rmtree(temp_dir, ignore_errors=True)
+        
+        logger.debug(f"계산된 지표: {metric_results}")
+        return metric_results
         
     except Exception as e:
         logger.error(f"평가 지표 계산 중 오류 발생: {e}")
         import traceback
-        traceback.print_exc()  # 상세 오류 메시지 출력
+        traceback.print_exc()
         metric_results = {
-            'mota': 0.0,
-            'motp': 0.0,
-            'num_switches': 0,
-            'mostly_tracked': 0,
-            'mostly_lost': 0,
-            'num_fragmentations': 0,
-            'idf1': 0.0,
-            'precision': 0.0,
-            'recall': 0.0,
-            'fp': 0,
-            'fn': 0,
-            'hota': 0.0,
+            'pedestrian': {
+                'HOTA': 0.0, 'DetA': 0.0, 'AssA': 0.0, 'DetRe': 0.0, 'DetPr': 0.0, 'AssRe': 0.0, 'AssPr': 0.0,
+                'LocA': 0.0, 'OWTA': 0.0, 'HOTA(0)': 0.0, 'LocA(0)': 0.0, 'HOTALocA(0)': 0.0,
+                'MOTA': 0.0, 'MOTP': 0.0, 'MODA': 0.0, 'CLR_Re': 0.0, 'CLR_Pr': 0.0, 'MTR': 0.0, 'PTR': 0.0,
+                'MLR': 0.0, 'sMOTA': 0.0, 'CLR_TP': 0, 'CLR_FN': 0, 'CLR_FP': 0, 'IDSW': 0, 'MT': 0, 'PT': 0,
+                'ML': 0, 'Frag': 0, 'IDF1': 0.0, 'IDR': 0.0, 'IDP': 0.0, 'IDTP': 0, 'IDFN': 0, 'IDFP': 0,
+                'Dets': 0, 'GT_Dets': 0, 'IDs': 0, 'GT_IDs': 0
+            }
         }
         return metric_results
+    
+    finally:
+        logger.debug(f"임시 디렉토리 정리: {temp_dir}")
+        shutil.rmtree(temp_dir, ignore_errors=True)

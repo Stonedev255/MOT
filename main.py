@@ -318,59 +318,35 @@ def process_sequence(sequence, detector, tracker, config):
     metrics = {}
     if sequence['gt_path'] and os.path.exists(sequence['gt_path']):
         try:
-            # 메트릭 계산
-            metrics = calculate_mot_metrics(tracking_results, sequence['gt_path'], sequence['name'])
-            metrics['fps'] = fps
-
-            logger.info("\n===== 성능 평가 결과 =====")
-            logger.info(f"MOTA: {metrics['mota']:.2f}%")
-            logger.info(f"MOTP: {metrics['motp']:.2f}%")
-            logger.info(f"IDF1: {metrics['idf1']:.2f}%")  # 추가
-            logger.info(f"Precision: {metrics['precision']:.2f}%")  # 추가
-            logger.info(f"Recall: {metrics['recall']:.2f}%")  # 추가
-            logger.info(f"ID Switches: {metrics['num_switches']}")
-            logger.info(f"Fragmentations: {metrics['num_fragmentations']}")  # 추가
-            logger.info(f"FP (오검지): {metrics['fp']}")  # 추가
-            logger.info(f"FN (미검지): {metrics['fn']}")  # 추가
-            logger.info(f"MT: {metrics['mostly_tracked']}")
-            logger.info(f"ML: {metrics['mostly_lost']}")
-            logger.info(f"FPS: {fps:.2f}")
-            logger.info("==========================\n")
+            metrics = calculate_mot_metrics(tracking_results, sequence['gt_path'], sequence['name'], config['paths']['metrics_dir'])
+            for class_name in metrics:
+                metrics[class_name]['fps'] = fps  # 클래스별로 FPS 추가
         except Exception as e:
             logger.error(f"지표 계산 중 오류 발생: {e}")
             metrics = {
-                'mota': 0.0,
-                'motp': 0.0,
-                'num_switches': 0,
-                'mostly_tracked': 0,
-                'mostly_lost': 0,
-                'num_fragmentations': 0,  # 수정: fragmenttations → num_fragmentations
-                'idf1': 0.0,              # 추가
-                'precision': 0.0,         # 추가
-                'recall': 0.0,            # 추가
-                'fp': 0,                  # 추가
-                'fn': 0,                  # 추가
-                'fps': fps
+                'pedestrian': {
+                    'HOTA': 0.0, 'DetA': 0.0, 'AssA': 0.0, 'DetRe': 0.0, 'DetPr': 0.0, 'AssRe': 0.0, 'AssPr': 0.0,
+                    'LocA': 0.0, 'OWTA': 0.0, 'HOTA(0)': 0.0, 'LocA(0)': 0.0, 'HOTALocA(0)': 0.0,
+                    'MOTA': 0.0, 'MOTP': 0.0, 'MODA': 0.0, 'CLR_Re': 0.0, 'CLR_Pr': 0.0, 'MTR': 0.0, 'PTR': 0.0,
+                    'MLR': 0.0, 'sMOTA': 0.0, 'CLR_TP': 0, 'CLR_FN': 0, 'CLR_FP': 0, 'IDSW': 0, 'MT': 0, 'PT': 0,
+                    'ML': 0, 'Frag': 0, 'IDF1': 0.0, 'IDR': 0.0, 'IDP': 0.0, 'IDTP': 0, 'IDFN': 0, 'IDFP': 0,
+                    'Dets': 0, 'GT_Dets': 0, 'IDs': 0, 'GT_IDs': 0, 'fps': fps
+                }
             }
     else:
         logger.warning(f"GT 데이터를 찾을 수 없음: {sequence['gt_path']}")
         metrics = {
-            'mota': 0.0,
-            'motp': 0.0,
-            'num_switches': 0,
-            'mostly_tracked': 0,
-            'mostly_lost': 0,
-            'num_fragmentations': 0,     # 추가
-            'idf1': 0.0,                 # 추가
-            'precision': 0.0,            # 추가
-            'recall': 0.0,               # 추가
-            'fp': 0,                     # 추가
-            'fn': 0,                     # 추가
-            'fps': fps
+            'pedestrian': {
+                'HOTA': 0.0, 'DetA': 0.0, 'AssA': 0.0, 'DetRe': 0.0, 'DetPr': 0.0, 'AssRe': 0.0, 'AssPr': 0.0,
+                'LocA': 0.0, 'OWTA': 0.0, 'HOTA(0)': 0.0, 'LocA(0)': 0.0, 'HOTALocA(0)': 0.0,
+                'MOTA': 0.0, 'MOTP': 0.0, 'MODA': 0.0, 'CLR_Re': 0.0, 'CLR_Pr': 0.0, 'MTR': 0.0, 'PTR': 0.0,
+                'MLR': 0.0, 'sMOTA': 0.0, 'CLR_TP': 0, 'CLR_FN': 0, 'CLR_FP': 0, 'IDSW': 0, 'MT': 0, 'PT': 0,
+                'ML': 0, 'Frag': 0, 'IDF1': 0.0, 'IDR': 0.0, 'IDP': 0.0, 'IDTP': 0, 'IDFN': 0, 'IDFP': 0,
+                'Dets': 0, 'GT_Dets': 0, 'IDs': 0, 'GT_IDs': 0, 'fps': fps
+            }
         }
-
+    
     return tracking_results, metrics
-
 def main():
     """메인 실행 함수"""
     # 인자 파싱
@@ -427,43 +403,27 @@ def main():
     all_results = {}
     for sequence in sequences:
         tracking_results, metrics = process_sequence(sequence, detector, tracker, config)
-        
-        # 결과 저장
         sequence_name = sequence['name']
-        # 결과 저장 부분
+        
         result_data = {
             'detector': config['detector'],
             'dataset': config['dataset'],
             'sequence': sequence_name,
-            'MOTA': metrics['mota'],
-            'MOTP': metrics['motp'],
-            'IDF1': metrics['idf1'],
-            'Precision': metrics['precision'],
-            'Recall': metrics['recall'],
-            'MT': metrics['mostly_tracked'],
-            'ML': metrics['mostly_lost'],
-            'ID Switches': metrics['num_switches'],
-            'Fragmentations': metrics['num_fragmentations'],
-            'FP': metrics['fp'],
-            'FN': metrics['fn'],
-            'FPS': metrics['fps']
+            'metrics': metrics  # 클래스별 결과를 그대로 포함
         }
         all_results[sequence_name] = result_data
         
-        # 개별 시퀀스 결과 저장
         save_results(
             result_data,
             os.path.join(config['paths']['metrics_dir'], f"{sequence_name}.{config['output_format']}"),
             format=config['output_format']
         )
+        logger.info(f"결과 저장 완료: {config['paths']['metrics_dir']}/{sequence_name}.{config['output_format']}")
     
-    # 전체 결과 요약 저장
     summary_path = os.path.join(config['paths']['metrics_dir'], f"summary.{config['output_format']}")
     save_results(all_results, summary_path, format=config['output_format'])
     
     logger.info(f"모든 결과가 {config['paths']['metrics_dir']}에 저장되었습니다.")
-    logger.info(f"특징 추출기: {config.get('extractor', 'efficient')}")  # 이 줄 추가
     logger.info("===== YOLO + DeepSORT 성능 평가 완료 =====")
-
 if __name__ == "__main__":
     main()
